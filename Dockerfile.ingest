@@ -1,0 +1,18 @@
+FROM python:3.10-slim
+
+WORKDIR /work
+
+RUN pip install -U pip
+
+# Torch CUDA 12.4 (wheel đã bundle CUDA runtime)
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu124
+
+# Chỉ copy requirements trước để tận dụng layer cache khi code thay đổi
+COPY requirements-ingest.txt .
+RUN pip install --no-cache-dir -r requirements-ingest.txt
+
+# Copy file ingest (và chỉ những gì cần cho job)
+COPY ingest.py .
+
+# Mặc định chạy ingest.py, tham số sẽ truyền từ docker compose
+ENTRYPOINT ["python", "ingest.py"]

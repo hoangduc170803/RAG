@@ -1,0 +1,183 @@
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.9
+    container_name: etcd
+    restart: unless-stopped
+    command: >
+      etcd
+      -name etcd
+      -advertise-client-urls http://etcd:2379
+      -listen-client-urls http://0.0.0.0:2379
+      -initial-advertise-peer-urls http://etcd:2380
+      -listen-peer-urls http://0.0.0.0:2380
+      -initial-cluster etcd=http://etcd:2380
+      -data-dir /etcd
+    volumes:
+      - ./data/etcd:/etcd
+
+  tei:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
+    environment:
+      MODEL_ID: "${TEI_MODEL}"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      TOKENIZERS_PARALLELISM: "true"
+    ports:
+      - "${TEI_PORT:-8081}:80"
+    volumes: 
+      - ./models/${TEI_MODEL_NAME}:/models
+    restart: unless-stopped
+    # mem_limit: 8g
+    # mem_reservation: 6g
+          
+
+  # RAG Backend Service
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: rag-backend
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    environment:
+      MILVUS_URI: "${MILVUS_URI:-http://milvus:19530}"
+      COLLECTION: "${COLLECTION:-my_rag_collection}"
+      DIM: "${DIM:-1024}"
+      TEI_URL: "http://tei:80"
+      VLLM_URL: "http://vllm:8000/v1"
+    volumes:
+      - ./backend:/app
+      - ./data:/data
+    depends_on:
+      milvus:
+        condition: service_healthy
+      tei:
+        condition: service_started
+      vllm:
+        condition: service_started
+            
+
+
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: vllm
+    restart: unless-stopped
+    ports:
+      - "${VLLM_PORT:-8000}:8000"
+    
+    environment:
+      HUGGING_FACE_HUB_TOKEN: "${HF_TOKEN}"   
+    volumes:
+      # Ánh xạ thư mục chứa model
+      - ./models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: >
+
+      --model /models/gemma-3-1b-it
+      --served-model-name gemma-3-1b-it
+      --trust-remote-code
+      --gpu-memory-utilization 0.8
+      --max-model-len 8192
+      
+        
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    ports:
+      - "9001:9001"
+    volumes:
+      - ./data/minio:/data
+
+  milvus:
+    image: milvusdb/milvus:v2.5.17
+    container_name: milvus
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: "etcd:2379"
+      MINIO_ADDRESS: "minio:9000"
+      MINIO_ACCESS_KEY: "minioadmin"
+      MINIO_SECRET_KEY: "minioadmin"
+      MINIO_USE_SSL: "false"
+      MILVUS_LOG_LEVEL: "info"
+    depends_on:
+      - etcd
+      - minio
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    volumes:
+      - ./data/milvus:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s 
+
+  attu:
+    image: zilliz/attu:v2.5.10
+    container_name: attu
+    restart: unless-stopped
+    environment:
+      MILVUS_URL: "milvus:19530"
+    ports:
+      - "8001:3000"
+    depends_on:
+      - milvus
+
+  # test search
+# FILE: docker-compose.yml (Chỉ phần service app)
+
+  app:
+    build:
+      context: ./app  
+      dockerfile: Dockerfile
+    container_name: app
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: "http://backend:8080"
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./app:/app
+    depends_on:
+      - backend
+
+
+  ingest:
+    build:
+      context: .
+      dockerfile: Dockerfile.ingest
+    container_name: ingest
+    working_dir: /work
+    # Nếu có GPU
+    gpus: all
+    volumes:
+      - ./:/work
+    environment:
+      MILVUS_URI: "${MILVUS_URI:-milvus:19530}"
+      COLLECTION: "${COLLECTION:-my_rag_collection}"
+      INPUT_JSON: "${INPUT_JSON:-/work/data/final_output.json}"
+      BATCH_SIZE: ${BATCH_SIZE:-128}
+    depends_on:
+      - milvus
+    profiles: ["manual"]
+    command: >
+      --milvus-uri $MILVUS_URI 
+      --collection $COLLECTION
+      --input-json $INPUT_JSON
+      --normalize

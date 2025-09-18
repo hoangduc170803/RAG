@@ -1,0 +1,8 @@
+# Web API & UI
+fastapi
+requests
+streamlit
+
+# Milvus client và ML cho query
+pymilvus==2.6.1
+

@@ -1,0 +1,12 @@
+# FastAPI web framework and server
+fastapi
+uvicorn[standard]
+
+# Milvus client
+pymilvus==2.6.1
+
+# HTTP requests to other services (vLLM, TEI)
+requests
+
+# Pydantic is a dependency of FastAPI but it's good practice to pin it
+pydantic==2.8.2
