@@ -5,7 +5,7 @@ from api_utils import list_sessions, delete_session, rename_session
 def display_sidebar():
     """Hiển thị sidebar với các tùy chọn và lịch sử chat có thể quản lý."""
     st.sidebar.header("Cài đặt")
-    model_options = ["gemma-3-12b-it"]
+    model_options = ["gemma-3-1b-it"]
     st.sidebar.selectbox("Chọn Model", options=model_options, key="model")
 
     st.sidebar.divider()

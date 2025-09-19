@@ -10,3 +10,10 @@ requests
 
 # Pydantic is a dependency of FastAPI but it's good practice to pin it
 pydantic==2.8.2
+
+
+# LangChain dependencies
+langchain
+langchain-community
+langchain-milvus
+langchain-openai

@@ -40,9 +40,6 @@ $ docker compose --profile manual run --rm ingest \
 # Bước 1: Cập nhật package list
  apt-get update
 
-
-
-# hoặc
 apt install -y nvidia-driver-580 nvidia-utils-580
 
 
@@ -141,7 +138,7 @@ cd /root/final_project
 ls -la docker-compose.yaml
 
 # Chạy tất cả services
-docker-compose up -d
+docker compose up -d
 
 # Kiểm tra services đang chạy
 docker-compose ps

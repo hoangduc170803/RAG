@@ -1,340 +1,304 @@
-import requests
-from typing import List, Dict, Optional, Generator, Union
-from search import hybrid_search, search_dense_only, search_bm25_only
-import json
 import logging
-from dataclasses import dataclass, asdict
+from typing import List, Dict, Optional, Any, Union
+from dataclasses import dataclass
 from enum import Enum
+
+from langchain.schema import Document, BaseRetriever
+from langchain.prompts import PromptTemplate, ChatPromptTemplate
+from langchain.chains import RetrievalQA, ConversationalRetrievalChain
+from langchain.memory import ConversationBufferMemory
+from langchain.callbacks.base import BaseCallbackHandler
+from langchain_community.llms import VLLMOpenAI
+
+
+# Import các hàm search có sẵn
+from search import (
+    hybrid_search,
+    search_dense_only, 
+    search_bm25_only,
+    get_dense_embedding
+)
+
+
+class PromptLogger(BaseCallbackHandler):
+    def on_llm_start(self, serialized, prompts, **kwargs):
+        # với LLM (text)
+        for i, p in enumerate(prompts):
+            logger.info(f"PROMPT[{i}]:\n---\n{p}\n---")
+
+    def on_chat_model_start(self, serialized, messages, **kwargs):
+        # với ChatModel (list of messages)
+        for i, msg_list in enumerate(messages):
+            pretty = "\n".join([f"{m.type.upper()}: {getattr(m, 'content', m)}" for m in msg_list])
+            logger.info(f"CHAT_PROMPT[{i}]:\n---\n{pretty}\n---")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class SearchMethod(Enum):
     HYBRID = "hybrid"
-    DENSE = "dense"  
+    DENSE = "dense"
     BM25 = "bm25"
 
 @dataclass
 class RAGConfig:
-    """Configuration for RAG Chain"""
+    """LangChain RAG Configuration"""
     vllm_url: str = "http://vllm:8000/v1"
-    model_name: str = "gemma-3-12b-it"
-    temperature: float = 0.1
+    model_name: str = "gemma-3-1b-it"  
+    temperature: float = 0.7
     max_tokens: int = 512
     default_top_k: int = 10
     
-    @classmethod
-    def from_env(cls):
-        """Create config from environment variables"""
-        import os
-        return cls(
-            vllm_url=os.getenv("VLLM_URL", cls.vllm_url),
-            model_name=os.getenv("VLLM_MODEL_NAME", cls.model_name)
-        )
 
-@dataclass 
-class RAGResponse:
-    """Structured RAG response"""
-    query: str
-    answer: str
-    success: bool
-    metadata: Dict
-    sources: Optional[List[Dict]] = None
-
-class RAGChain:
-    """Improved RAG Chain with better structure"""
+class CustomSearchRetriever(BaseRetriever):
+    """Wrapper để dùng search.py functions với LangChain"""
+    # Khai báo FIELDS (được phép set qua __init__)
+    search_method: SearchMethod = SearchMethod.HYBRID
+    top_k: int = 10
     
-    def __init__(self, config: Optional[RAGConfig] = None, **kwargs):
-        if config:
-            self.config = config
-        else:
-            # Support backward compatibility
-            self.config = RAGConfig(**kwargs)
-    
-    def retrieve_context(
-        self, 
-        query: str, 
-        method: Union[str, SearchMethod] = SearchMethod.HYBRID, 
-        top_k: Optional[int] = None
-    ) -> List[Dict]:
-        """Retrieve relevant documents"""
-        if isinstance(method, str):
-            method = SearchMethod(method)
-            
-        top_k = top_k or self.config.default_top_k
-        
-        logger.info(f"Retrieving {top_k} documents using {method.value} search")
-        
-        # Strategy pattern for search methods
-        search_strategies = {
+    def __init__(self, **data):
+        super().__init__(**data)
+        # map hàm search runtime
+        self._search_functions = {
             SearchMethod.HYBRID: hybrid_search,
             SearchMethod.DENSE: search_dense_only,
-            SearchMethod.BM25: search_bm25_only
+            SearchMethod.BM25: search_bm25_only,
         }
+    
+    def _get_relevant_documents(self, query: str) -> List[Document]:
+        """Convert search results to LangChain Documents"""
         
-        search_func = search_strategies.get(method)
-        if not search_func:
-            raise ValueError(f"Unknown search method: {method}")
-            
-        results = search_func(query, top_k)
-        logger.info(f"Retrieved {len(results)} documents")
-        return results
-    
-
-    def _format_context(self, documents: List[Dict]) -> str:
-        """
-        Formats documents into a clean, structured, and easy-to-parse string for the LLM.
-        Each document is presented as a distinct record with clear labels.
-        """
-        if not documents:
-            return "Không có thông tin liên quan được tìm thấy."
-
-        context_parts = []
-        for i, doc in enumerate(documents, 1):
-            # Trích xuất source từ bên trong trường 'text' nếu có
-            text_content = doc.get('text', '')
-            source_info = "Không rõ nguồn" # Giá trị mặc định
-
-            # Giả định rằng source nằm trong một dòng riêng biệt dạng {'source': '...'}
-            lines = text_content.split('\n')
-            remaining_lines = []
-            for line in lines:
-                if line.strip().startswith("{'source':"):
-                    try:
-                        # Dùng eval để parse chuỗi dict một cách an toàn (cẩn thận nếu input không đáng tin)
-                        source_dict = eval(line)
-                        source_info = source_dict.get('source', source_info)
-                    except:
-                        remaining_lines.append(line) # Nếu parse lỗi, giữ lại dòng đó
-                else:
-                    remaining_lines.append(line)
-            
-            clean_text = "\n".join(remaining_lines).strip()
-
-            # Tạo một khối văn bản có cấu trúc cho mỗi tài liệu
-            context_parts.append(
-                f"--- Tài liệu {i} ---\nNGUỒN: {source_info}\nNỘI DUNG: {clean_text}"
-            )
-
-        return "\n\n".join(context_parts)
-    
-
-
-    def _create_prompt(self, query: str, context: str) -> str:
-        """A prompt template designed to extract both answer and source."""
-        return f"""Bạn là một trợ lý AI chuyên trích xuất thông tin. Nhiệm vụ của bạn là trả lời câu hỏi dựa trên thông tin tham khảo và trích dẫn nguồn một cách chính xác.
-
-    **QUY TẮC BẮT BUỘC:**
-    1.  Đọc kỹ CÂU HỎI và tìm câu trả lời trong THÔNG TIN THAM KHẢO.
-    2.  Nếu có nhiều nguồn hãy liệt kê tất cả nguồn đó ra.
-    3.  Lấy tên nguồn từ dòng `NGUỒN:` của tài liệu đó.
-    4.  Trình bày kết quả theo đúng ĐỊNH DẠNG ĐẦU RA.
-    5.  Nếu không tìm thấy câu trả lời trong NỘI DUNG của bất kỳ tài liệu nào, hãy trả lời theo định dạng sau:
-        [TRẢ LỜI]: Tôi không tìm thấy thông tin về vấn đề này trong tài liệu.
-        [NGUỒN]: Không có
-
-    **ĐỊNH DẠNG ĐẦU RA:**
-    [TRẢ LỜI]: <Nội dung câu trả lời được trích xuất từ THÔNG TIN THAM KHẢO>
-    [NGUỒN]: <Tên file nguồn được trích xuất từ dòng NGUỒN>
-
-
-
-    **BẮT ĐẦU THỰC HIỆN:**
-
-    **THÔNG TIN THAM KHẢO:**
-    {context}
-
-    **CÂU HỎI:** {query}
-
-    **TRẢ LỜI:**"""
-    
-    def _call_llm(self, prompt: str, stream: bool = False) -> Dict:
-        """Call VLLM service"""
-        payload = {
-            "model": self.config.model_name,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": self.config.temperature,
-            "max_tokens": self.config.max_tokens,
-            "stream": stream
-        }
+        # Gọi hàm search tương ứng từ search.py
+        search_func = self._search_functions[self.search_method]
+        results = search_func(query, self.top_k)
         
-        try:
-            response = requests.post(
-                f"{self.config.vllm_url}/chat/completions",
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                stream=stream
-            )
-            response.raise_for_status()
-            
-            if stream:
-                return {"success": True, "stream": response}
-            
-            result = response.json()
-            return {
-                "success": True,
-                "response": result['choices'][0]['message']['content'],
-                "usage": result.get('usage', {})
-            }
-            
-        except requests.RequestException as e:
-            logger.error(f"Error calling VLLM service: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "response": "Xin lỗi, tôi không thể tạo câu trả lời lúc này."
-            }
-    
-    def process(
-        self, 
-        query: str,
-        search_method: Union[str, SearchMethod] = SearchMethod.HYBRID,
-        top_k: Optional[int] = None,
-        include_sources: bool = True
-    ) -> RAGResponse:
-        """Main RAG pipeline"""
-        logger.info(f"Processing RAG query: {query}")
-        
-        try:
-            # Retrieve documents
-            documents = self.retrieve_context(query, search_method, top_k)
-            
-            # Generate response
-            context = self._format_context(documents)
-            logger.info(f"CONTEXT PASSED TO PROMPT:\n---\n{context}\n---")
-            prompt = self._create_prompt(query, context)
-            logger.info(f"PROMPT:\n---\n{prompt}\n---")
-            generation_result = self._call_llm(prompt)
-            
-            # Build response
-            response = RAGResponse(
-                query=query,
-                answer=generation_result.get("response", ""),
-                success=generation_result.get("success", False),
+        # Convert to LangChain Document format
+        documents = []
+        for result in results:
+            doc = Document(
+                page_content=result['text'],
                 metadata={
-                    "search_method": search_method.value if isinstance(search_method, SearchMethod) else search_method,
-                    "num_documents": len(documents),
-                    "model": self.config.model_name,
-                    "usage": generation_result.get("usage", {})
+                    'doc_id': result['doc_id'],
+                    'score': result['score'],
+                    'search_type': result['search_type']
                 }
             )
+            documents.append(doc)
+        
+        return documents
+    
+    async def _aget_relevant_documents(self, query: str) -> List[Document]:
+        """Async version"""
+        return self._get_relevant_documents(query)
+
+class LangChainRAG:
+    """LangChain RAG using existing search.py"""
+    
+    def __init__(self, config: Optional[RAGConfig] = None):
+        self.config = config or RAGConfig()
+        self._initialize_components()
+    
+    def _initialize_components(self):
+        """Initialize LangChain components"""
+        
+        # Initialize LLM
+        self.llm = VLLMOpenAI(
+            openai_api_base=self.config.vllm_url,
+            model_name=self.config.model_name,
+            temperature=self.config.temperature,
+            max_tokens=self.config.max_tokens
+        )
+        
+        # Initialize retrievers using search.py functions
+        self.retrievers = {
+            SearchMethod.HYBRID: CustomSearchRetriever(
+                search_method=SearchMethod.HYBRID,
+                top_k=self.config.default_top_k
+            ),
+            SearchMethod.DENSE: CustomSearchRetriever(
+                search_method=SearchMethod.DENSE,
+                top_k=self.config.default_top_k
+            ),
+            SearchMethod.BM25: CustomSearchRetriever(
+                search_method=SearchMethod.BM25,
+                top_k=self.config.default_top_k
+            )
+        }
+        
+        # Initialize memory
+        self.memory = ConversationBufferMemory(
+            memory_key="chat_history",
+            return_messages=True,
+            output_key="answer"
+        )
+        
+        # Create prompt templates
+        self._create_prompts()
+    
+    def _create_prompts(self):
+        """Create prompt templates"""
+        
+        
+        self.qa_prompt = PromptTemplate(
+            input_variables=["context", "question"],
+            template="""Bạn là trợ lý AI thông minh. Trả lời câu hỏi dựa trên thông tin được cung cấp.
+
+
+
+THÔNG TIN THAM KHẢO:
+{context}
+
+CÂU HỎI: {question}
+
+TRẢ LỜI:"""
+        )
+        
+        # Conversational prompt with history
+        self.conv_prompt = PromptTemplate(
+            input_variables=["chat_history", "context", "question"],
+            template="""Bạn là trợ lý AI thông minh trong cuộc hội thoại.
+
+LỊCH SỬ HỘI THOẠI:
+{chat_history}
+
+THÔNG TIN THAM KHẢO MỚI:
+{context}
+
+CÂU HỎI HIỆN TẠI: {question}
+
+
+
+**TRẢ LỜI:"""
+        )
+    
+    def create_qa_chain(self, search_method: SearchMethod = SearchMethod.HYBRID):
+        """Create basic QA chain"""
+        retriever = self.retrievers[search_method]
+        
+        qa_chain = RetrievalQA.from_chain_type(
+            llm=self.llm,
+            chain_type="stuff",
+            retriever=retriever,
+            return_source_documents=True,
+            chain_type_kwargs={
+                "prompt": self.qa_prompt
+            }
+        )
+        
+        return qa_chain
+    
+    def create_conversational_chain(
+        self, 
+        search_method: SearchMethod = SearchMethod.HYBRID,
+        session_id: Optional[str] = None
+    ):
+        """Create conversational chain with memory"""
+        retriever = self.retrievers[search_method]
+        
+        # Clear memory cho session mới
+        self.memory.clear()
+        
+        # Load chat history if session_id provided
+        if session_id:
+            from db_utils import get_chat_history
+            history = get_chat_history(session_id, limit=10)
             
-            if include_sources:
-                response.sources = [
+            # Add to memory
+            for msg in history:
+                if msg["role"] == "user":
+                    self.memory.chat_memory.add_user_message(msg["content"])
+                else:
+                    self.memory.chat_memory.add_ai_message(msg["content"])
+        
+        conv_chain = ConversationalRetrievalChain.from_llm(
+            llm=self.llm,
+            retriever=retriever,
+            memory=self.memory,
+            return_source_documents=True,
+            combine_docs_chain_kwargs={
+                "prompt": self.conv_prompt
+            }
+        )
+        
+        return conv_chain
+    
+    
+    
+    def process(
+        self,
+        query: str,
+        session_id: Optional[str] = None,
+        search_method: SearchMethod = SearchMethod.HYBRID,
+        include_history: bool = True
+    ) -> Dict[str, Any]:
+        """Main processing function"""
+        
+        try:
+            logger.info(f"Processing query: {query} with method: {search_method.value}")
+
+            # Tạo callback để log prompt
+            cb = PromptLogger()
+
+            # Tạo chain
+            if session_id and include_history:
+                chain = self.create_conversational_chain(search_method, session_id)
+                payload = {"question": query}
+            else:
+                chain = self.create_qa_chain(search_method)
+                payload = {"query": query}
+
+            # Gọi chain với callback 
+            try:
+                result = chain.invoke(payload, config={"callbacks": [cb]})
+            except Exception:
+                result = chain(payload, callbacks=[cb])
+
+            # Lấy answer
+            answer = result.get("result", result.get("answer", ""))
+            
+            # Format response
+            response = {
+                "query": query,
+                "answer": answer,
+                "success": True,
+                "metadata": {
+                    "search_method": search_method.value,
+                    "num_documents": len(result.get("source_documents", [])),
+                    "model": self.config.model_name,
+                    "session_id": session_id
+                }
+            }
+            
+            # Add sources if available
+            if "source_documents" in result:
+                response["sources"] = [
                     {
-                        "doc_id": doc.get("doc_id"),
-                        "text": doc.get("text"),
-                        "score": doc.get("score"),
-                        "search_type": doc.get("search_type")
+                        "content": doc.page_content[:200],  # Preview
+                        "doc_id": doc.metadata.get("doc_id"),
+                        "score": doc.metadata.get("score"),
+                        "search_type": doc.metadata.get("search_type")
                     }
-                    for doc in documents
+                    for doc in result["source_documents"]
                 ]
             
-            logger.info(f"RAG processing completed. Success: {response.success}")
+            logger.info(f"Successfully processed query. Answer length: {len(answer)}")
             return response
             
         except Exception as e:
-            logger.error(f"Error in RAG process: {e}")
-            return RAGResponse(
-                query=query,
-                answer=f"Lỗi xử lý: {str(e)}",
-                success=False,
-                metadata={"error": str(e)}
-            )
-    
-    def process_streaming(
-        self,
-        query: str,
-        search_method: Union[str, SearchMethod] = SearchMethod.HYBRID,
-        top_k: Optional[int] = None
-    ) -> Generator[Dict, None, None]:
-        """Stream RAG response"""
-        try:
-            # Retrieve context
-            documents = self.retrieve_context(query, search_method, top_k)
-            context = self._format_context(documents)
-            prompt = self._create_prompt(query, context)
-            
-            # Yield metadata first
-            yield {
-                "type": "metadata",
-                "data": {
-                    "query": query,
-                    "num_documents": len(documents),
-                    "search_method": search_method.value if isinstance(search_method, SearchMethod) else search_method
-                }
+            logger.error(f"Error in LangChain RAG: {e}", exc_info=True)
+            return {
+                "query": query,
+                "answer": f"Lỗi xử lý: {str(e)}",
+                "success": False,
+                "metadata": {"error": str(e)}
             }
-            
-            # Yield sources
-            yield {"type": "sources", "data": documents}
-            
-            # Stream response
-            stream_result = self._call_llm(prompt, stream=True)
-            
-            if stream_result["success"]:
-                for line in stream_result["stream"].iter_lines():
-                    if line:
-                        line = line.decode('utf-8')
-                        if line.startswith("data: "):
-                            data = line[6:]
-                            if data != "[DONE]":
-                                try:
-                                    chunk = json.loads(data)
-                                    if 'choices' in chunk and chunk['choices']:
-                                        delta = chunk['choices'][0].get('delta', {})
-                                        if 'content' in delta:
-                                            yield {
-                                                "type": "content",
-                                                "data": delta['content']
-                                            }
-                                except json.JSONDecodeError:
-                                    continue
-            
-            yield {"type": "done", "data": {}}
-            
-        except Exception as e:
-            logger.error(f"Streaming error: {e}")
-            yield {"type": "error", "data": str(e)}
 
-    def to_dict(self) -> Dict:
-        """Convert to dictionary for JSON serialization"""
-        return asdict(self.config)
+# Singleton instance
+_rag_instance = None
 
-
-# Factory function
-def create_rag_chain(**kwargs) -> RAGChain:
-    """Factory function to create RAG chain"""
-    config = RAGConfig.from_env()
-    
-    # Override with provided kwargs
-    for key, value in kwargs.items():
-        if hasattr(config, key):
-            setattr(config, key, value)
-    
-    return RAGChain(config)
-
-
-# Utility functions
-def simple_rag_query(query: str, **kwargs) -> str:
-    """Simple wrapper for quick RAG queries"""
-    rag = create_rag_chain(**kwargs)
-    result = rag.process(query)
-    return result.answer
-
-
-def compare_search_methods(query: str, top_k: int = 3) -> Dict[str, RAGResponse]:
-    """Compare all search methods"""
-    rag = create_rag_chain()
-    results = {}
-    
-    for method in SearchMethod:
-        results[method.value] = rag.process(
-            query, 
-            search_method=method, 
-            top_k=top_k,
-            include_sources=True
-        )
-    
-    return results
-
-
+def get_langchain_rag() -> LangChainRAG:
+    """Get singleton RAG instance"""
+    global _rag_instance
+    if _rag_instance is None:
+        _rag_instance = LangChainRAG()
+    return _rag_instance

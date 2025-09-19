@@ -3,12 +3,12 @@ from enum import Enum
 from datetime import datetime
 
 class ModelName(str, Enum):
-    GEMMA_3_12B_IT = "gemma-3-12b-it"
+    GEMMA_3_1B_IT = "gemma-3-1b-it"
 
 class QueryInput(BaseModel):
     question: str
     session_id: str = Field(default=None)
-    model: ModelName = Field(default=ModelName.GEMMA_3_12B_IT)
+    model: ModelName = Field(default=ModelName.GEMMA_3_1B_IT)
 
 class QueryResponse(BaseModel):
     answer: str
