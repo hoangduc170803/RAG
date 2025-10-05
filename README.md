@@ -317,8 +317,8 @@ Kết quả evaluation của các models:
 
 | Model | Eval Loss |
 |-------|-----------|
-| Gemma 3-4B-IT | 0.01896 |
-| Gemma 3-1B-IT | 0.02866 |
+| Gemma 3-12-IT | 0.0730 |
+
 
 
 ## 📁 Cấu Trúc Dự Án
