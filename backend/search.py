@@ -51,7 +51,7 @@ def search_dense_only(query: str, top_k: int = 5):
         for hit in results[0]:
             retrieved_docs.append({
                 "text": hit.entity.get('text'),
-                "score": hit.score,  # Sử dụng hit.score thay vì hit.distance
+                "score": hit.score,  
                 "doc_id": hit.entity.get('doc_id'),
                 "search_type": "dense"
             })
@@ -98,91 +98,60 @@ def hybrid_search(query: str, top_k: int = 5):
         data=[dense_vec],
         anns_field="dense",
         param={"metric_type": "COSINE", "params": {}},
-        limit=top_k * 2  # Lấy nhiều hơn để rerank
+        limit=top_k * 3  
     )
     bm25_request = AnnSearchRequest(
         data=[query],  # Truyền query text trực tiếp cho BM25
         anns_field="sparse", 
         param={"metric_type": "BM25", "params": {}},
-        limit=top_k * 2
+        limit=top_k * 8
     )
-        
+    anchor_ranker = WeightedRanker(0.3, 0.7)
+    anchor = collection.hybrid_search(
+        reqs=[dense_request, bm25_request],
+        rerank=anchor_ranker,
+        limit=1,
+        output_fields=["doc_id","text"]
+    )
+    final, seen = [], set()
+    if anchor and anchor[0]:
+        h = anchor[0][0]
+        did = h.entity.get("doc_id")
+        if did:
+            final.append({"doc_id": did, "text": h.entity.get("text"), "score": h.score, "search_type":"anchor"})
+            seen.add(did)        
     
     print(f"Đang tìm kiếm top {top_k} kết quả với hybrid search...")
     
-    # 3. Thực hiện hybrid search với RRF reranker
-    try:
+    ranker = WeightedRanker(0.1, 0.9)
+    
+ 
+
         # Sử dụng list của AnnSearchRequest objects
-        results = collection.hybrid_search(
-            reqs=[dense_request, bm25_request],
-            rerank=RRFRanker(),  # Reciprocal Rank Fusion
-            limit=top_k,
-            output_fields=["doc_id", "text"]
-        )
+    fused = collection.hybrid_search(
+        reqs=[dense_request, bm25_request],
+        rerank=ranker,  
+        limit=top_k,
+        output_fields=["doc_id", "text"]
+    )
+    
+    if fused and fused[0]:
+        for h in fused[0]:
+            did = h.entity.get("doc_id")
+            if did and did not in seen:
+                final.append({"doc_id": did, "text": h.entity.get("text"), "score": h.score, "search_type":"rrf"})
+                seen.add(did)
+            if len(final) >= top_k:
+                break
+
         
-        retrieved_docs = []
-        if results and results[0]:
-            for hit in results[0]:
-                retrieved_docs.append({
-                    "text": hit.entity.get('text'),
-                    "score": hit.score,
-                    "doc_id": hit.entity.get('doc_id'),
-                    "search_type": "hybrid_rrf"
-                })
-        return retrieved_docs
+    return final
         
-    except Exception as e:
-        print(f"Lỗi hybrid search: {e}")
-        # Fallback: combine individual searches
-        return hybrid_search_fallback(query, top_k)
+
     
     
 
 
-def hybrid_search_fallback(query: str, top_k: int = 5):
-    """Fallback hybrid search bằng cách combine kết quả từ dense và BM25."""
-    print("Sử dụng fallback hybrid search...")
-    
-    # Lấy kết quả từ cả 2 phương pháp
-    dense_results = search_dense_only(query, top_k)
-    bm25_results = search_bm25_only(query, top_k)
-    
-    # Combine và deduplicate results
-    combined_results = {}
-    
-    # Thêm dense results với weight 0.6
-    for result in dense_results:
-        doc_id = result["doc_id"]
-        combined_results[doc_id] = result.copy()
-        combined_results[doc_id]["final_score"] = result["score"] * 0.6
-        combined_results[doc_id]["dense_score"] = result["score"]
-        combined_results[doc_id]["bm25_score"] = 0.0
-        combined_results[doc_id]["search_type"] = "hybrid_fallback"
-    
-    # Thêm BM25 results với weight 0.4
-    for result in bm25_results:
-        doc_id = result["doc_id"]
-        if doc_id in combined_results:
-            # Document đã có từ dense search, cộng thêm BM25 score
-            combined_results[doc_id]["final_score"] += result["score"] * 0.4
-            combined_results[doc_id]["bm25_score"] = result["score"]
-        else:
-            # Document mới từ BM25 search
-            combined_results[doc_id] = result.copy()
-            combined_results[doc_id]["final_score"] = result["score"] * 0.4
-            combined_results[doc_id]["dense_score"] = 0.0
-            combined_results[doc_id]["bm25_score"] = result["score"]
-            combined_results[doc_id]["search_type"] = "hybrid_fallback"
-    
-    # Sort by final score và return top_k
-    final_results = list(combined_results.values())
-    final_results.sort(key=lambda x: x["final_score"], reverse=True)
-    
-    # Update score field to final_score for consistency
-    for result in final_results[:top_k]:
-        result["score"] = result["final_score"]
-    
-    return final_results[:top_k]
 
 
 def compare_search_methods(query: str, top_k: int = 3):
@@ -215,7 +184,7 @@ def compare_search_methods(query: str, top_k: int = 3):
 
 
 if __name__ == "__main__":
-    query = "gói cước TOUR ở PYC nào?"
+    query = "gói cước TOUR ở phiếu yêu cầu nào?"
     
     # Test basic hybrid search
     print("=== HYBRID SEARCH TEST ===")
@@ -227,3 +196,18 @@ if __name__ == "__main__":
     
     # Compare all methods
     compare_search_methods(query, top_k=10)
+if __name__ == "__main__":
+    query = "Mã KM N200X có phí tham gia bao nhiêu?"
+    
+    # Test basic hybrid search
+    print("=== HYBRID SEARCH TEST ===")
+    results = hybrid_search(query)
+    for i, res in enumerate(results, 1):
+        print(f"{i}. Score: {res['score']:.4f} | Type: {res['search_type']} | Doc: {res['doc_id']}")
+        print(f"   Text: {res['text'][:150]}...")
+        print()
+    
+    # Compare all methods
+    compare_search_methods(query, top_k=10)
+    
+    

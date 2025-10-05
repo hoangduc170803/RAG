@@ -7,3 +7,4 @@ tqdm==4.67.1
 numpy==2.2.6
 scipy==1.15.3
 joblib
+unicodedata

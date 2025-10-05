@@ -8,7 +8,7 @@ pymilvus==2.6.1
 # HTTP requests to other services (vLLM, TEI)
 requests
 
-# Pydantic is a dependency of FastAPI but it's good practice to pin it
+
 pydantic==2.8.2
 
 
@@ -17,3 +17,10 @@ langchain
 langchain-community
 langchain-milvus
 langchain-openai
+ragas
+datasets
+langchain-google-genai
+google-generativeai
+
+numpy 
+scikit-learn            

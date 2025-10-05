@@ -106,7 +106,8 @@ class LangChainRAG:
             openai_api_base=self.config.vllm_url,
             model_name=self.config.model_name,
             temperature=self.config.temperature,
-            max_tokens=self.config.max_tokens
+            max_tokens=self.config.max_tokens,
+            openai_api_key="dummy-key"
         )
         
         # Initialize retrievers using search.py functions

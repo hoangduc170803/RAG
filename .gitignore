@@ -2,3 +2,8 @@
 .env
 models/
 data/
+backend\evaluation.py
+backend\evaluation_report.txt
+backend\ground_truth_queries.py
+backend\Ragas_evaluation.py
+backend\test_evaluation.py
