@@ -264,7 +264,7 @@ curl -X POST http://localhost:8080/chat \
 
 - **Attu (Milvus Admin)**: http://localhost:8081
 - **MinIO Console**: http://localhost:9001
-- **API Docs**: http://localhost:8080/docs (nếu có Swagger)
+- **API Docs**: http://localhost:8080/docs
 
 ## 📊 API Documentation
 
