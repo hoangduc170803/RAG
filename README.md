@@ -278,7 +278,7 @@ Gửi câu hỏi và nhận câu trả lời từ RAG system
 {
   "question": "string",
   "session_id": "string (optional)",
-  "max_results": "integer (optional, default: 5)"
+  "max_results": "integer (optional, default: 10)"
 }
 ```
 
