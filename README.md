@@ -320,10 +320,6 @@ Kết quả evaluation của các models:
 | Gemma 3-4B-IT | 0.01896 |
 | Gemma 3-1B-IT | 0.02866 |
 
-### Chạy Evaluation
-```bash
-docker compose run --rm app python evaluation/evaluate.py
-```
 
 ## 📁 Cấu Trúc Dự Án
 
