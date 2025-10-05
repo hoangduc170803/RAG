@@ -184,19 +184,6 @@ def compare_search_methods(query: str, top_k: int = 3):
 
 
 if __name__ == "__main__":
-    query = "gói cước TOUR ở phiếu yêu cầu nào?"
-    
-    # Test basic hybrid search
-    print("=== HYBRID SEARCH TEST ===")
-    results = hybrid_search(query)
-    for i, res in enumerate(results, 1):
-        print(f"{i}. Score: {res['score']:.4f} | Type: {res['search_type']} | Doc: {res['doc_id']}")
-        print(f"   Text: {res['text'][:150]}...")
-        print()
-    
-    # Compare all methods
-    compare_search_methods(query, top_k=10)
-if __name__ == "__main__":
     query = "Mã KM N200X có phí tham gia bao nhiêu?"
     
     # Test basic hybrid search
