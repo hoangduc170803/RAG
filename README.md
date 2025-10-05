@@ -28,7 +28,7 @@ Hệ thống RAG (Retrieval-Augmented Generation) được xây dựng với Mil
 - 💬 **Chat Interface**: API hỗ trợ conversation với session management
 - 📊 **Vector Storage**: Lưu trữ và truy xuất embeddings hiệu quả
 - 🐳 **Docker Support**: Triển khai dễ dàng với Docker Compose
-- 🎯 **Model Evaluation**: Đánh giá performance của các models (Gemma 3-4B-IT, Gemma 3-1B-IT)
+- 🎯 **Model**: Đánh giá performance của các models (Gemma 3-4B-IT, Gemma 3-1B-IT)
 - 🔄 **Data Persistence**: Dữ liệu được lưu trữ bền vững với volume mounting
 
 ## 🏗️ Kiến Trúc Hệ Thống
