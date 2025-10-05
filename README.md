@@ -18,8 +18,7 @@ Hệ thống RAG (Retrieval-Augmented Generation) được xây dựng với Mil
 - [Đánh Giá Mô Hình](#-đánh-giá-mô-hình)
 - [Cấu Trúc Dự Án](#-cấu-trúc-dự-án)
 - [Troubleshooting](#-troubleshooting)
-- [Contributing](#-contributing)
-- [License](#-license)
+
 
 ## ✨ Tính Năng
 
