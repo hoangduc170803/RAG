@@ -40,7 +40,7 @@ Hệ thống RAG (Retrieval-Augmented Generation) được xây dựng với Mil
 ### Phần Cứng
 - **CPU**: 4+ cores (khuyến nghị)
 - **RAM**: 8GB+ (16GB khuyến nghị cho production)
-- **GPU**: NVIDIA GPU với CUDA support (tùy chọn, tăng tốc embedding và inference)
+- **GPU**: NVIDIA GPU với CUDA support (tùy chọn, tăng tốc embedding và inference, nếu sử dụng mô hình 12b khuyến nghị VRAM từ 32GB trở lên)
 - **Storage**: 20GB+ dung lượng trống
 
 ### Phần Mềm
